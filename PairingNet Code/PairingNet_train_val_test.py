@@ -1,5 +1,6 @@
 import __init__
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import cv2
 import torch
 import math
