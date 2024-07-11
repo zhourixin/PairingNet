@@ -30,5 +30,20 @@ The generated fragments dataset and real fragments dataset can be downloaded [he
 ## Training
 
 ## Evaluation on generated fragments dataset
+
+
 ## Evaluation on real fragments dataset
+
+
 ## Customize your own fragment data using our cutting algorithm
+
+## Contact
+- Rixin Zhou: taolu@smail.nju.edu.cn
+- Ding Xia: yumulin@pjlab.org.cn
+- Yi Zhang: yumulin@pjlab.org.cn
+- Honglin Pang: yumulin@pjlab.org.cn
+- Xi Yang: yumulin@pjlab.org.cn
+- Chuntao Li: yumulin@pjlab.org.cn
+## Citation
+
+If you find our work helpful, please consider citing our work.
