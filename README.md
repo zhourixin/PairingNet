@@ -25,5 +25,5 @@ conda activate PairingNet
 
 
 ## Dataset
-The full dataset can be downloaded [here]([https://kahlan.cvssp.org/data/Flickr25K/tubui/eccv22_repmix/Attribution88.tar.gz](https://huggingface.co/datasets/zhourxin/Fragments-dataset)).
+The generated fragments dataset and real fragments dataset can be downloaded [here](https://huggingface.co/datasets/zhourxin/Fragments-dataset). It consists of 8196 generated fragments of 390 images and 320 real fragments of 34 printed images. The generated fragments dataset is divided into train set, validation set and test set. 
 
