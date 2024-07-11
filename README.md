@@ -25,5 +25,10 @@ conda activate PairingNet
 
 
 ## Dataset
-The generated fragments dataset and real fragments dataset can be downloaded [here](https://huggingface.co/datasets/zhourxin/Fragments-dataset). It consists of 8196 generated fragments of 390 images and 320 real fragments of 34 printed images. The generated fragments dataset is divided into train set, validation set and test set. 
+The generated fragments dataset and real fragments dataset can be downloaded [here](https://huggingface.co/datasets/zhourxin/Fragments-dataset). It consists of 8196 generated fragments of 390 PNG images and 320 real fragments of 34 printed images. The generated fragments dataset is divided into train set, validation set and test set. 
 
+## Training
+
+## Evaluation on generated fragments dataset
+## Evaluation on real fragments dataset
+## Customize your own fragment data using our cutting algorithm
