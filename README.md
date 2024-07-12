@@ -38,12 +38,12 @@ The generated fragments dataset and real fragments dataset can be downloaded [he
 ## Customize your own fragment data using our cutting algorithm
 
 ## Contact
-- Rixin Zhou: taolu@smail.nju.edu.cn
-- Ding Xia: yumulin@pjlab.org.cn
-- Yi Zhang: yumulin@pjlab.org.cn
-- Honglin Pang: yumulin@pjlab.org.cn
-- Xi Yang: yumulin@pjlab.org.cn
-- Chuntao Li: yumulin@pjlab.org.cn
+- Rixin Zhou: zhourx22@mails.jlu.edu.cn
+- Ding Xia: dingxia1995@gmail.com
+- Yi Zhang: 2356711993@qq.com
+- Honglin Pang: panghlwork@gmail.com
+- Xi Yang: earthyangxi@gmail.com
+- Chuntao Li: lct33@jlu.edu.cn
 ## Citation
 
 If you find our work helpful, please consider citing our work.
