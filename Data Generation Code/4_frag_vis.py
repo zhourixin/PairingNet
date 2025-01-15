@@ -2,13 +2,19 @@ import os
 import cv2
 import numpy as np
 from glob import glob
+import re
 
+def extract_number(file_path):
+    filename = os.path.basename(file_path)
+    match = re.search(r'\d+', filename)
+    if match:
+        return int(match.group())
+    return 0  
 
 def vis(dir_path,overall_folder):
     base_name = os.path.basename(dir_path)
-    if base_name == "00074":
-        print(1)
     img_path = list(glob(dir_path + '/*.png'))
+    img_path = sorted(img_path, key=extract_number, reverse=False)
     gt_path = os.path.join(dir_path, 'gt.txt')
     bg_path = os.path.join(dir_path, 'bg.txt')
     gt_list = []
@@ -49,7 +55,7 @@ def vis(dir_path,overall_folder):
         else:
             contour = np.asarray(contour, dtype=np.float).reshape(-1, 2)
         for m in range(len(contour)):
-            cv2.circle(img, tuple(contour[m].astype(np.int)), 2, (255, 255, 255), -1)
+            cv2.circle(img, tuple(contour[m].astype(np.int32)), 2, (255, 255, 255), -1)
 
         gt_pose = gt_list[i]
         gt_pose = np.linalg.inv(gt_pose)
@@ -63,7 +69,7 @@ def vis(dir_path,overall_folder):
 if __name__ == '__main__':
 
     # fragment path
-    root = "./"
+    root = r"./"
     parent_path = os.path.dirname(root)
     overall_folder = os.path.join(parent_path, "OVERALL")
     if os.path.exists(overall_folder) is False:
