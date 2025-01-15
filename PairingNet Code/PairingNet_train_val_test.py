@@ -1110,6 +1110,395 @@ class ST2_SearchModel(object):
         print(result)
 
 
+class Real_TestModel(Train_model):
+    def __init__(self, net, args, temperature, case_name, save_img=True, save_corres=False, save_w=False,
+                 save_gt=False):
+        self.save_img = save_img
+        self.save_corres = save_corres
+        self.save_w = save_w
+        self.save_gt = save_gt
+        checkpoint_path = EXP_path+'/EXP/{}/checkpoint/'.format(case_name)
+        best_checkpoint = self.get_max_file_number(checkpoint_path)
+        self.checkpoint_path_evl = EXP_path+'/EXP/{}/checkpoint/{}'.format(case_name, best_checkpoint)
+        self.case_name = case_name
+        '''set testing dataset'''
+        print('set testing dataset')
+        self.test_data, self.test_set = self.set_real_dataset(args.real_test_set, args)
+        self.test_loader = DataLoader(self.test_data, 1, shuffle=False)
+        self.gt_pairs = self.test_set['GT_pairs']
+
+        '''set testing model'''
+        print('set testing model')
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.temperature = temperature
+
+        args.flattenNet_config['input_dim'] = args.patch_size ** 2
+        self.models = net(args)
+        self.models.to(self.device)
+        self.models.eval()
+        self.models.requires_grad_(False)
+        self.args = args
+    
+    def set_real_dataset(self, data_path, args):
+        with open(data_path, 'rb') as gt_file:
+            gt_config = pickle.load(gt_file)
+
+        gt_config['model_type'] = args.model_type
+        gt_config['channel'] = args.channel
+        gt_config['c_model'] = args.c_model
+        gt_config['patch_size'] = args.patch_size
+        dataset = data_preprocess.MyRealDataSet(gt_config, args)
+        return dataset, gt_config
+    
+    def get_similarity_matrix_real_test(self, feature1, feature2, pad_mask):
+        similarity_matrix = torch.bmm(feature1, feature2.permute(0, 2, 1)) / self.temperature
+        similarity_matrix[pad_mask] -= 1e9  # give a very small value to the padded part for softmax operation
+        s_i = torch.softmax(similarity_matrix, dim=1)  # row softmax
+        s_j = torch.softmax(similarity_matrix, dim=-1)  # column softmax
+        similarity_matrix = torch.multiply(s_i, s_j)
+
+        return similarity_matrix
+    
+
+    def load_checkpoint_evl(self):
+        checkpoint = torch.load(self.checkpoint_path_evl)
+        self.models.load_state_dict(checkpoint['model_state_dict'])
+        return
+    
+    def get_max_file_number(self, directory):
+        max_number = -1
+        max_file = None
+        for file in os.listdir(directory):
+            if os.path.isfile(os.path.join(directory, file)):
+                match = re.search(r'\d+', file)
+                if match:
+                    number = int(match.group())
+                    if number > max_number:
+                        max_number = number
+                        max_file = file
+        return max_file
+    
+    def calculate_area_opencv(self, points):
+        # 将点转换为numpy数组
+        contour = np.array(points)
+        
+        # 计算轮廓的面积
+        area = cv2.contourArea(contour)
+        
+        return area
+    
+    def cosine_similarity(self, vec1, vec2):
+        # 计算两个向量的点积
+        dot_product = np.sum(vec1 * vec2, axis=1)
+        # 计算每个向量的L2范数（即向量的长度）
+        norm_vec1 = np.linalg.norm(vec1, axis=1)
+        norm_vec2 = np.linalg.norm(vec2, axis=1)
+        # 计算余弦相似度
+        cosine_similarity = dot_product / (norm_vec1 * norm_vec2)
+        return cosine_similarity
+    
+    def calculate_ratio(self, mixed_feature, vec_c, vec_t):
+        # 计算两个向量的和
+        vec_contour = self.cosine_similarity(mixed_feature, vec_c)
+        vec_texture = self.cosine_similarity(mixed_feature, vec_t)
+        sum_vec = vec_contour + vec_texture
+        # 计算第一个向量的每一个位置元素除以两个向量该位置的元素的和
+        ratio = np.divide(vec_contour, sum_vec, out=np.zeros_like(vec_contour), where=sum_vec!=0)
+        return ratio
+    
+
+    def test_start(self):
+        self.load_checkpoint_evl()
+        gt_pairs = self.gt_pairs
+        device = self.device
+        global c
+        valid_nums4 = 0  # count the good registration nums
+        valid_nums2 = 0
+        valid_nums6 = 0
+        c = 0  # count the fragment nums
+        w_min = 100
+        w_count = 0
+        haus_list = []  # list of mean hausdroff distance of each gt pair
+
+        '''test start'''
+        print('test start!')
+        saved_test_data = {
+            "pred_real_transformation":[],
+            # "GT_transformation":[],
+        }
+        saved_test_weight = []
+        for batch, (mask_para, imgs, pcd, c_input, t_input, adjs, factors) in enumerate(tqdm(self.test_loader)):
+
+            max_point_nums = len(pcd[0][0])
+            adj_s = self.get_concat_adj(adjs[0], max_point_nums)
+            adj_t = self.get_concat_adj(adjs[1], max_point_nums)
+
+            source_input = {
+                'pcd': pcd[0].to(device), 'img': imgs[0].to(device), 'c_input': c_input[0].to(device),
+                'adj': adj_s.to(device), 'factor': factors[0].to(device), 't_input': t_input[0].to(device)
+            }
+
+            target_input = {
+                'pcd': pcd[1].to(device), 'img': imgs[1].to(device), 'c_input': c_input[1].to(device),
+                'adj': adj_t.to(device), 'factor': factors[1].to(device), 't_input': t_input[1].to(device)
+            }
+
+            pad_mask = self.get_pad_mask(mask_para).to(device)  # mark the padded part in similarity matrix
+            # mask = mask_para[0].to(device)
+            feature_s, concat_source, w_s = self.models(source_input)
+            feature_t, concat_target, w_t = self.models(target_input)
+            similarity_matrix = self.get_similarity_matrix_real_test(feature_s, feature_t, pad_mask)
+
+
+            '''visualization part'''
+            similarity_matrix = similarity_matrix[0].cpu().numpy()
+            kernel = np.eye(3, dtype=np.uint8)
+            kernel[1, 1] = 0
+            kernel = np.rot90(kernel)
+            similarity_matrix = cv2.erode(similarity_matrix, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0)
+            kernel[1, 1] = 1
+            similarity_matrix = cv2.dilate(similarity_matrix, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0)
+
+            idx_s, idx_t = gt_pairs[batch]
+            s_pcd_origin, t_pcd_origin = self.test_set['full_pcd_all'][idx_s], self.test_set['full_pcd_all'][idx_t]
+            # s_pcd, t_pcd = self.test_set['down_sample_pcd'][idx_s], self.test_set['down_sample_pcd'][idx_t]
+            s_pcd, t_pcd = self.test_set['full_pcd_all'][idx_s], self.test_set['full_pcd_all'][idx_t]
+            # ind_s_origin, ind_t_origin = self.test_set['source_ind'][batch], self.test_set['target_ind'][batch]
+            source_img, target_img = self.test_set['img_all'][idx_s], self.test_set['img_all'][idx_t]
+            img_save_path = EXP_path+'/EXP/{}/result/real_img'.format(self.case_name)
+            corres_save_path = EXP_path+'/EXP/{}/result/corres'.format(self.case_name)
+            os.makedirs(img_save_path, exist_ok=True)
+            os.makedirs(corres_save_path, exist_ok=True)
+            evl = visualization.Visualization_real_data(similarity_matrix, s_pcd, t_pcd, source_img,
+                                              target_img, s_pcd_origin, t_pcd_origin, conv_threshold=0.006) 
+
+            transformation, pairs = evl.get_transformation()
+
+
+            # get weighted img
+            # w_s = 1- w_s
+            if self.save_w:
+                img_s = source_img.transpose(1, 0, 2)
+                img_s = np.ascontiguousarray(img_s)
+                evl.img_s = evl.weight_visualize(os.path.join(img_save_path, 'w_s{}.png'.format(batch)),
+                                                 img_s, s_pcd, w_s[0].detach().cpu().numpy())
+
+
+                img_t = target_img.transpose(1, 0, 2)
+                img_t = np.ascontiguousarray(img_t)
+                evl.img_t = evl.weight_visualize(os.path.join(img_save_path, 'w_t{}.png'.format(batch)),
+                                                 img_t, t_pcd, w_t[0].detach().cpu().numpy())
+
+            # save predicted result pairs
+            if self.save_img:
+                evl.get_img(os.path.join(img_save_path, 'pred{}.png'.format(batch)), transformation)
+
+        with open(EXP_path+'/EXP/{}/result/saved_real_test_data.pkl'.format(self.case_name), 'wb') as file:
+            pickle.dump(saved_test_data, file)
+
+
+
+class STAGE_ONE_REAL(Train_model):
+    def __init__(self, net, args, temperature, case_name, save_img=False, save_corres=False, save_w=False,
+                 save_gt=False):
+        self.save_img = save_img
+        self.save_corres = save_corres
+        # self.save_w = save_w
+        # self.save_gt = save_gt
+        checkpoint_path = EXP_path+'/EXP/{}/checkpoint/'.format(case_name)
+        best_checkpoint = self.get_max_file_number(checkpoint_path)
+        self.checkpoint_path_evl = EXP_path+'/EXP/{}/checkpoint/{}'.format(case_name, best_checkpoint)
+        self.case_name = case_name
+        if os.path.exists(EXP_path+'/EXP2/{}'.format(case_name)) is False:
+            os.makedirs(EXP_path+'/EXP2/{}'.format(case_name))
+        feature_save_path = args.real_stage2_feature_path+"/{}".format(case_name)
+        self.saved_train_feature_path = feature_save_path+'/real_img_feature_{}.pkl'.format(args.dataset_select)
+
+        if os.path.exists(feature_save_path) is False:
+            os.makedirs(feature_save_path)
+        
+        '''set train dataset'''
+        print('set training dataset')
+        self.train_data, self.train_GT = self.set_real_dataset(args.real_test_set, args)
+        self.train_loader = DataLoader(self.train_data, 1, num_workers=0,shuffle=False)
+        self.train_gt_pairs = self.train_GT['GT_pairs']
+        self.train_pcd = self.train_GT['full_pcd_all']
+
+
+        '''set testing model'''
+        print('set stage1 model')
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        # self.temperature = temperature
+
+        args.flattenNet_config['input_dim'] = args.patch_size ** 2
+        self.models = net(args)
+        self.models.to(self.device)
+        self.models.eval()
+        self.models.requires_grad_(False)
+        self.args = args
+
+    def set_real_dataset(self, data_path, args):
+        with open(data_path, 'rb') as gt_file:
+            gt_config = pickle.load(gt_file)
+
+        gt_config['model_type'] = args.model_type
+        gt_config['channel'] = args.channel
+        gt_config['c_model'] = args.c_model
+        gt_config['patch_size'] = args.patch_size
+        dataset = data_preprocess.MyRealDataSet(gt_config, args)
+        return dataset, gt_config
+
+
+    def load_checkpoint_evl(self):
+        checkpoint = torch.load(self.checkpoint_path_evl)
+        self.models.load_state_dict(checkpoint['model_state_dict'])
+        return
+    
+    def get_max_file_number(self, directory):
+        max_number = -1
+        max_file = None
+        for file in os.listdir(directory):
+            if os.path.isfile(os.path.join(directory, file)):
+                match = re.search(r'\d+', file)
+                if match:
+                    number = int(match.group())
+                    if number > max_number:
+                        max_number = number
+                        max_file = file
+        return max_file
+
+    def stage1_start(self):
+        self.load_checkpoint_evl()
+        device = self.device
+        '''save train feature'''
+        train_saved_feature = {
+            "saved_feature": [],
+            "GT_pairs":self.train_gt_pairs,
+            "full_pcd":self.train_pcd,
+        }
+        for batch, (pcd, imgs, t_input, adj, factor, c_input) in enumerate(tqdm(self.train_loader)):
+            max_point_nums = len(pcd[0])
+
+            adj = self.get_concat_adj2(adj, max_point_nums)
+            inputs = {
+                'pcd': pcd.to(device), 'img': imgs.to(device), 't_input': t_input.to(device),
+                'adj': adj.to(device), 'factor': factor.to(device), 'c_input': c_input.to(device)
+            }
+
+            matching_feature, feature, _ = self.models(inputs) # bs,2611,64
+            train_saved_feature["saved_feature"].append(feature.squeeze().cpu())
+            
+        
+        with open(self.saved_train_feature_path, 'wb') as file:
+            pickle.dump(train_saved_feature, file)
+
+        
+        print("Stage 1 Real over")
+
+class ST2_Real_SearchModel(object):
+    def __init__(self, net, args, temperature, case_name):
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.case_name = case_name
+        self.checkpoint_path = EXP_path+'/EXP2/{}/checkpoint'.format(case_name)
+        self.saved_test_feature_path = args.real_stage2_feature_path+'/{}/real_img_feature_{}.pkl'.format(case_name, args.dataset_select)
+        self.test_data, self.Stage1_data = self.set_dataset_searching(self.saved_test_feature_path, args)
+        self.test_loader = DataLoader(self.test_data, 1, num_workers=0, shuffle=False)
+        self.models = net(args)
+        self.models.to(self.device)
+        self.models.eval()
+        self.models.requires_grad_(False)
+        self.feature_all_flatten = torch.zeros((0, args.global_out_channels))
+        self.max_point = args.max_length
+
+
+    def get_max_file_number(self, directory):
+        max_number = -1
+        max_file = None
+        for file in os.listdir(directory):
+            if os.path.isfile(os.path.join(directory, file)):
+                match = re.search(r'\d+', file)
+                if match:
+                    number = int(match.group())
+                    if number > max_number:
+                        max_number = number
+                        max_file = file
+        return max_file
+    
+    def set_dataset_searching(self, data_path, args):
+        with open(data_path, 'rb') as feature_file:
+            stage1_features = pickle.load(feature_file)
+        dataset = data_preprocess.MyRealDataSet_searching(stage1_features, args)
+        return dataset, stage1_features
+
+    def load_checkpoint_evl(self, checkpoint_path_evl):
+        checkpoint = torch.load(checkpoint_path_evl)
+        self.models.load_state_dict(checkpoint['model_state_dict'])
+        return
+
+    def feature_searching(self, result_matrix, gt_pair):
+        """to get the topk searching result from score matrix"""
+        # result_matrix = result_matrix + result_matrix.T
+        sort_matrix = torch.sort(result_matrix, dim=-1, descending=True)
+        # sort_matrix = torch.sort(result_matrix, dim=-1, descending=False)
+        idx = sort_matrix[1]
+        idx = idx.numpy() #（3279，3279）  gt_pair（2370，2）
+        l = []
+        bad_list = []
+        for i in range(len(gt_pair)):
+            # if mins < len_all[i] <= maxs:
+            l.append(np.argwhere(idx[gt_pair[i][0]] == gt_pair[i][1]))
+            a = int(np.argwhere(idx[gt_pair[i][0]] == gt_pair[i][1]))
+            if a > 20:
+                bad_list.append(i)
+
+        result = np.array(l).reshape(-1)
+
+        top1 = (result < 1).sum() / len(l)
+        top5 = (result < 5).sum() / len(l)
+        top10 = (result < 10).sum() / len(l)
+        top20 = (result < 20).sum() / len(l)
+
+        return top1, top5, top10, top20
+    
+    @staticmethod
+    def get_concat_adj2(adj, max_len):
+        device = adj.device
+        temp_adj = torch.zeros((2, 0), dtype=torch.int).to(device)
+        for i in range(len(adj)):
+            b = torch.nonzero(adj[i]).transpose(0, 1)
+            # a = adj[i].coalesce().indices() #(2,8602)
+            temp_adj = torch.hstack((temp_adj, b + i * max_len))
+
+        return temp_adj
+    
+    
+    def searching_start(self):
+        best_checkpoint = self.get_max_file_number(self.checkpoint_path)
+        print("best_checkpoint:{}".format(best_checkpoint))
+
+        checkpoint_path_evl = EXP_path+'/EXP2/{}/checkpoint/{}'.format(self.case_name, best_checkpoint).format(self.case_name, best_checkpoint)
+        self.load_checkpoint_evl(checkpoint_path_evl)
+
+        for batch, (stage1_features) in enumerate(tqdm(self.test_loader)):
+            stage1_features, pcd = stage1_features
+            stage1_features, pcd = stage1_features.to(self.device), pcd.to(self.device)
+
+            max_point_nums = self.max_point
+            # adj = self.get_concat_adj2(adj, max_point_nums)
+            
+            F_global, _ = self.models(stage1_features, pcd)
+
+            self.feature_all_flatten = torch.cat((self.feature_all_flatten, F_global.cpu()), dim=0)
+
+        F_normalized = F.normalize(self.feature_all_flatten, p=2, dim=1)
+        # 计算余弦相似度矩阵
+        cos_sim_matrix = torch.matmul(F_normalized, F_normalized.T)
+        cos_sim_matrix.fill_diagonal_(-1)
+        result = self.feature_searching(cos_sim_matrix, self.Stage1_data['GT_pairs'])
+        print(result)
+
+        calute_NDCG(cos_sim_matrix, self.Stage1_data['GT_pairs'])
+
 
 def init_seeds(seed=0, cuda_deterministic=True):
     random.seed(seed)
@@ -1149,4 +1538,14 @@ if __name__ == "__main__":
         ST2.train_start()
     elif opt.model_type == 'searching_test':
         ST2_searcher = ST2_SearchModel(ST2_net, opt, temp, exp_name)
+        ST2_searcher.searching_start()
+
+    elif opt.model_type == 'real_dataset_test':
+        Real_tester = Real_TestModel(net, opt, temp, exp_name)
+        Real_tester.test_start()
+    elif opt.model_type == 'stage1_real':  # --------------------stage1:save feature---------------------
+        ST1 = STAGE_ONE_REAL(net, opt, temp, exp_name)
+        ST1.stage1_start()
+    elif opt.model_type == 'stage2_real_searching':
+        ST2_searcher = ST2_Real_SearchModel(ST2_net, opt, temp, exp_name)
         ST2_searcher.searching_start()
