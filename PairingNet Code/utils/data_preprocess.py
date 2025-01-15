@@ -177,9 +177,9 @@ class MyDataSet(Dataset):
             self.inputs['att_mask_t'] = torch.stack(self.inputs['att_mask_t'], 0)
 
     def __len__(self):
-        if self.model == 'searching' or self.model == 'stage1':
+        if self.model in ["searching_train", "searching_test", "save_stage1_feature"]:
             return len(self.inputs['img_all'])
-        elif  self.model == 'train' or self.model == 'test':
+        elif self.model in ["matching_train", "matching_test"]:
             return len(self.inputs['GT_pairs'])
 
     def __getitem__(self, idx):
